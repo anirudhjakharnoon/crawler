@@ -10,6 +10,15 @@ import type { Database } from "./types";
 
 let cached: SupabaseClient<Database> | null = null;
 
+/**
+ * Cheap, side-effect-free check so hooks/components can bail out gracefully
+ * (rather than throwing mid-render or inside a fire-and-forget effect) when
+ * this deployment is missing its Supabase env vars.
+ */
+export function isSupabaseConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+}
+
 export function getSupabaseBrowserClient(): SupabaseClient<Database> {
   if (cached) return cached;
 
