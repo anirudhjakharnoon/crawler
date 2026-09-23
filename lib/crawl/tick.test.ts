@@ -109,7 +109,6 @@ describe("processTickBatch (integration, mocked fetch)", () => {
       { robots_cache: "domain", job_rate_limits: "owner" }
     );
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const client = fake as any;
 
     const result = await processTickBatch(client, "job-1", {
@@ -194,7 +193,6 @@ describe("processTickBatch (integration, mocked fetch)", () => {
       { robots_cache: "domain", job_rate_limits: "owner" }
     );
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const client = fake as any;
     const result = await processTickBatch(client, "job-1", {
       userAgent: "CrawlrBot/1.0 (+https://crawlr.example/about-crawlr)",
@@ -217,7 +215,6 @@ describe("processTickBatch (integration, mocked fetch)", () => {
       crawl_jobs: [buildJobFixture({ status: "aborted" })],
       crawl_queue: [],
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const client = fake as any;
     const result = await processTickBatch(client, "job-1", {
       userAgent: "CrawlrBot/1.0",

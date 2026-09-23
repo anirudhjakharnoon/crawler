@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkAndIncrementJobCreationLimit, clampRateLimitRps, tokensAvailable } from "./rateLimiter";
 import { HARD_MAX_RATE_LIMIT_RPS, JOB_CREATE_LIMIT_PER_WINDOW, JOB_CREATE_WINDOW_MS } from "./constants";
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySupabase = any;
 
 describe("clampRateLimitRps", () => {

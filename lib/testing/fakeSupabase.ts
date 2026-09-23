@@ -90,7 +90,6 @@ export class FakeSupabase {
       return { data: headOnly ? null : cloned, error: null, count: wantCount ? total : undefined };
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const builder: any = {
       select(_cols?: string, opts?: SelectOpts) {
         if (opts?.count) wantCount = true;
