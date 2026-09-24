@@ -45,7 +45,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
   const stillHasWork = lastResult.jobStatus === "running" && !lastResult.frontierEmpty;
   if (stillHasWork) {
-    kickOffTick(req.nextUrl.origin, jobId);
+    kickOffTick(req.nextUrl.origin, jobId, admin);
   }
 
   return NextResponse.json({

@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
 
   const jobs = staleJobs ?? [];
   for (const job of jobs) {
-    kickOffTick(req.nextUrl.origin, job.id);
+    kickOffTick(req.nextUrl.origin, job.id, admin);
   }
 
   return NextResponse.json({ requeued: jobs.length, jobIds: jobs.map((j) => j.id) });

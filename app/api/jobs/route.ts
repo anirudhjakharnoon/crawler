@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
       userAgent,
     });
 
-    kickOffTick(req.nextUrl.origin, job.id);
+    kickOffTick(req.nextUrl.origin, job.id, admin);
 
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {
