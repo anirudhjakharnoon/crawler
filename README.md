@@ -293,7 +293,16 @@ on conflict (id) do update set public = excluded.public;
 -- the tick route, signed URLs in the export route, deletes in the cleanup
 -- cron), which bypasses Storage RLS entirely. This keeps the bucket
 -- unreachable by anyone holding only the anon key.
-alter table storage.objects enable row level security;
+--
+-- Note: we deliberately do NOT run
+--   alter table storage.objects enable row level security;
+-- here. Supabase already owns that table (it's created/managed by the
+-- storage extension) and enables RLS on it by default in every project —
+-- the SQL editor's role isn't the table owner, so attempting this
+-- yourself fails with `must be owner of table objects`. There is nothing
+-- left to do: RLS is on, and since no policies exist for the `exports`
+-- bucket, only the service-role key (which bypasses RLS entirely) can
+-- touch it.
 ```
 
 > **Note on Storage "lifecycle":** Supabase Storage has no native
@@ -337,23 +346,44 @@ Environment Variables):
 
 ### 3.1 Cron entries (`vercel.json`, already in the repo)
 
+> **Deviation — Hobby plan cron limit.** Vercel's **Hobby** plan only
+> allows cron jobs that run **once per day**; any more-frequent expression
+> (e.g. every minute, or hourly) fails at deploy time with "Hobby accounts
+> are limited to daily cron jobs." The spec's intent (watchdog checking
+> every ~90s, cleanup hourly) requires the **Pro** plan. `vercel.json`
+> ships with the Hobby-safe default below so the project deploys
+> out-of-the-box; if you're on Pro, switch to the faster schedules in the
+> "Pro plan" row for the tighter recovery/retention cadence the spec
+> describes.
+
 ```json
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
-    { "path": "/api/cron/watchdog", "schedule": "* * * * *" },
-    { "path": "/api/cron/cleanup", "schedule": "0 * * * *" }
+    { "path": "/api/cron/watchdog", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/cleanup", "schedule": "30 4 * * *" }
   ]
 }
 ```
 
-- **watchdog** (every minute): re-invokes `tick` for any `status='running'`
-  job whose `last_ticked_at` is older than `WATCHDOG_STALE_MS` (90s) — the
+| | watchdog | cleanup |
+|---|---|---|
+| **Hobby plan (default, ships in repo)** | `0 4 * * *` — once/day | `30 4 * * *` — once/day |
+| **Pro plan (edit `vercel.json` to this)** | `* * * * *` — every minute | `0 * * * *` — hourly |
+
+- **watchdog**: re-invokes `tick` for any `status='running'` job whose
+  `last_ticked_at` is older than `WATCHDOG_STALE_MS` (90s) — the
   forward-progress backstop if a self-fetch continuation chain is ever lost
-  (e.g. a function crash mid-invocation).
-- **cleanup** (hourly): deletes jobs (and their cascaded `crawl_queue` /
+  (e.g. a function crash mid-invocation). On the Hobby default schedule
+  this backstop only sweeps once a day, so a truly-stuck job (rare — the
+  in-process tick loop and its self-fetch continuation are the primary
+  mechanism and don't depend on this cron at all) could sit looking
+  "running" for up to ~24h before being caught, instead of ~90s. Upgrade
+  to Pro and use the faster schedule above if that gap matters for you.
+- **cleanup**: deletes jobs (and their cascaded `crawl_queue` /
   `crawl_pages` / `crawl_assets` rows) plus their Storage object, once older
   than `RETENTION_WINDOW_MS` (48h). Also prunes expired `robots_cache` rows.
+  Once/day is plenty for this one regardless of plan.
 
 Vercel Cron requests carry a Bearer `CRON_SECRET` header automatically when
 that env var is set on the project — no extra wiring needed.

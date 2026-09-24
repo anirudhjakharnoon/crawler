@@ -51,7 +51,11 @@ export const TICK_BATCH_SIZE = 8;
 export const ROBOTS_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
 // ---- Watchdog / cleanup ----
-export const WATCHDOG_STALE_MS = 90_000; // last_ticked_at older than this => re-invoke tick
+// last_ticked_at older than this on a running job => re-invoke tick. Note:
+// the shipped vercel.json cron schedule only sweeps once/day on Vercel's
+// Hobby plan (which forbids more-frequent cron jobs) — see README §3.1 for
+// the Pro-plan schedule that actually honors this ~90s target.
+export const WATCHDOG_STALE_MS = 90_000;
 export const RETENTION_WINDOW_MS = 48 * 60 * 60 * 1000; // 48h — jobs+storage older than this get purged
 
 // ---- Images ZIP bundling ----
