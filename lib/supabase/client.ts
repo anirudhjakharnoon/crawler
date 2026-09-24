@@ -6,6 +6,7 @@
  */
 import { createBrowserClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { assertValidSupabaseUrl } from "./env";
 import type { Database } from "./types";
 
 let cached: SupabaseClient<Database> | null = null;
@@ -28,6 +29,7 @@ export function getSupabaseBrowserClient(): SupabaseClient<Database> {
   if (!url || !anonKey) {
     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY env vars");
   }
+  assertValidSupabaseUrl(url, "NEXT_PUBLIC_SUPABASE_URL");
 
   cached = createBrowserClient<Database>(url, anonKey);
   return cached;

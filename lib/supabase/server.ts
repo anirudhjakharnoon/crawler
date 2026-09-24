@@ -8,6 +8,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { assertValidSupabaseUrl } from "./env";
 import type { Database } from "./types";
 
 export function getSupabaseServerClient(): SupabaseClient<Database> {
@@ -18,6 +19,7 @@ export function getSupabaseServerClient(): SupabaseClient<Database> {
   if (!url || !anonKey) {
     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY env vars");
   }
+  assertValidSupabaseUrl(url, "NEXT_PUBLIC_SUPABASE_URL");
 
   return createServerClient<Database>(url, anonKey, {
     cookies: {
