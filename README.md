@@ -334,9 +334,9 @@ Environment Variables):
 
 | Variable | Where it's used | Notes |
 |---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | browser + server | Your project's API URL. Safe to expose. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | browser + server | Anon key — RLS-scoped, safe to expose. |
-| `SUPABASE_SERVICE_ROLE_KEY` | server only (`lib/supabase/admin.ts`, `import "server-only"`) | **Never** prefix with `NEXT_PUBLIC_`. Bypasses RLS — used only in API routes/tick/cron. |
+| `NEXT_PUBLIC_SUPABASE_URL` | browser + server | Your project's **Project URL** — a real `https://xxxx.supabase.co` address, found via the "Connect" button on your Supabase project or Settings → Data API. This is a URL, not a key — if you paste a key here the app now throws a clear "not a valid URL" error naming this variable. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | browser + server | RLS-scoped, safe to expose. On newer Supabase projects this is labeled **"Publishable key"** (`sb_publishable_...`) instead of the older **"anon key"** (a long `eyJ...` JWT) — Supabase renamed it, but either format works fine here under this same variable name. Find it in Settings → API Keys. |
+| `SUPABASE_SERVICE_ROLE_KEY` | server only (`lib/supabase/admin.ts`, `import "server-only"`) | **Never** prefix with `NEXT_PUBLIC_`. Bypasses RLS — used only in API routes/tick/cron. On newer Supabase projects this is labeled **"Secret key"** (`sb_secret_...`) instead of the older **"service_role key"** — same idea, use whichever your project shows, under this same variable name. |
 | `NEXT_PUBLIC_APP_URL` | `lib/robots.ts` (User-Agent string), `lib/crawl/invokeTick.ts` (self-fetch origin) | e.g. `https://your-deployment.vercel.app`. |
 | `CRON_SECRET` | `lib/http.ts` (`assertInternalRequest`) | Optional but recommended. Vercel Cron automatically sends this as a Bearer token when set in the Vercel project's env vars, so `/api/cron/*` and the tick self-fetch can be locked to "internal callers only" in production. Fails **open** (allows the request) only when `NODE_ENV !== "production"`, so local dev works without it. |
 
