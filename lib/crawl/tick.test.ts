@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { FakeSupabase, type Row } from "@/lib/testing/fakeSupabase";
 import { processTickBatch } from "./tick";
 
@@ -6,8 +6,10 @@ vi.mock("@/lib/ssrf", async () => {
   const actual = await vi.importActual<typeof import("@/lib/ssrf")>("@/lib/ssrf");
   return { ...actual, safeFetch: vi.fn() };
 });
+vi.mock("@/lib/render", () => ({ renderPage: vi.fn() }));
 
 import { safeFetch } from "@/lib/ssrf";
+import { renderPage } from "@/lib/render";
 
 const PAGE_HTML = `
 <!doctype html>
@@ -72,9 +74,47 @@ function buildJobFixture(overrides: Partial<Row> = {}): Row {
   };
 }
 
+const SHELL_HTML = `
+<!doctype html>
+<html>
+<head><title>SPA Shell</title></head>
+<body class="body"><div id="container"></div>
+<script>window.addEventListener('DOMContentLoaded', function() { renderApp(); });</script>
+</body>
+</html>
+`;
+
+const RENDERED_HTML = `
+<!doctype html>
+<html>
+<head><title>SPA Shell</title></head>
+<body>
+  <main>
+    <article>
+      <h1>Rendered Article</h1>
+      <p>This paragraph only exists once the page's own client-side JavaScript has actually run and populated the DOM with real, substantial, comma-containing prose content for the extractor to find.</p>
+      <p>A second paragraph keeps this comfortably above the render-fallback word-count threshold so the test is unambiguous either way.</p>
+    </article>
+  </main>
+</body>
+</html>
+`;
+
 describe("processTickBatch (integration, mocked fetch)", () => {
+  const originalEnableRendering = process.env.ENABLE_JS_RENDERING;
+
   beforeEach(() => {
     vi.mocked(safeFetch).mockReset();
+    vi.mocked(renderPage).mockReset();
+    delete process.env.ENABLE_JS_RENDERING;
+  });
+
+  afterEach(() => {
+    if (originalEnableRendering === undefined) {
+      delete process.env.ENABLE_JS_RENDERING;
+    } else {
+      process.env.ENABLE_JS_RENDERING = originalEnableRendering;
+    }
   });
 
   it("crawls a single page (scope='page'), extracts text+images+video, and assembles the export", async () => {
@@ -208,6 +248,153 @@ describe("processTickBatch (integration, mocked fetch)", () => {
     const jobs = fake.getTable("crawl_jobs");
     expect(jobs[0]?.pages_skipped).toBe(1);
     expect(jobs[0]?.robots_disallowed).toBe(1);
+  });
+
+  it("falls back to headless rendering when static HTML looks like a JS shell and ENABLE_JS_RENDERING is set", async () => {
+    process.env.ENABLE_JS_RENDERING = "true";
+
+    vi.mocked(safeFetch).mockImplementation(async (url: string) => {
+      if (url.endsWith("/robots.txt")) {
+        return makeFakeResponse(200, "User-agent: *\nAllow: /\n", { "content-type": "text/plain" });
+      }
+      if (url === "https://example.com/") {
+        return makeFakeResponse(200, SHELL_HTML, { "content-type": "text/html; charset=utf-8" });
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.mocked(renderPage).mockResolvedValue({ html: RENDERED_HTML, finalUrl: "https://example.com/" });
+
+    const fake = new FakeSupabase(
+      {
+        crawl_jobs: [buildJobFixture({ content_types: ["text"] })],
+        crawl_queue: [
+          {
+            id: 1,
+            job_id: "job-1",
+            url: "https://example.com/",
+            normalized_url: "https://example.com/",
+            depth: 0,
+            status: "pending",
+            discovered_from: null,
+            http_status: null,
+            skip_reason: null,
+            fetched_at: null,
+          },
+        ],
+      },
+      { robots_cache: "domain", job_rate_limits: "owner" }
+    );
+
+    const client = fake as any;
+    const result = await processTickBatch(client, "job-1", {
+      userAgent: "CrawlrBot/1.0 (+https://crawlr.example/about-crawlr)",
+      botToken: "CrawlrBot",
+      sleep: async () => {},
+    });
+
+    expect(result.jobStatus).toBe("completed");
+    expect(renderPage).toHaveBeenCalledWith("https://example.com/", "CrawlrBot/1.0 (+https://crawlr.example/about-crawlr)");
+
+    const pages = fake.getTable("crawl_pages");
+    expect(pages).toHaveLength(1);
+    expect(String(pages[0]?.markdown)).toContain("only exists once the page's own client-side JavaScript has actually run");
+
+    const events = fake.getTable("crawl_events");
+    expect(events.some((e) => e.kind === "extract" && String(e.message).includes("headless rendering"))).toBe(true);
+  });
+
+  it("keeps the static HTML and logs a warning if the rendering fallback itself throws", async () => {
+    process.env.ENABLE_JS_RENDERING = "true";
+
+    vi.mocked(safeFetch).mockImplementation(async (url: string) => {
+      if (url.endsWith("/robots.txt")) {
+        return makeFakeResponse(200, "User-agent: *\nAllow: /\n", { "content-type": "text/plain" });
+      }
+      if (url === "https://example.com/") {
+        return makeFakeResponse(200, SHELL_HTML, { "content-type": "text/html; charset=utf-8" });
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.mocked(renderPage).mockRejectedValue(new Error("browser launch failed"));
+
+    const fake = new FakeSupabase(
+      {
+        crawl_jobs: [buildJobFixture({ content_types: ["text"] })],
+        crawl_queue: [
+          {
+            id: 1,
+            job_id: "job-1",
+            url: "https://example.com/",
+            normalized_url: "https://example.com/",
+            depth: 0,
+            status: "pending",
+            discovered_from: null,
+            http_status: null,
+            skip_reason: null,
+            fetched_at: null,
+          },
+        ],
+      },
+      { robots_cache: "domain", job_rate_limits: "owner" }
+    );
+
+    const client = fake as any;
+    const result = await processTickBatch(client, "job-1", {
+      userAgent: "CrawlrBot/1.0",
+      botToken: "CrawlrBot",
+      sleep: async () => {},
+    });
+
+    expect(result.jobStatus).toBe("completed");
+    const events = fake.getTable("crawl_events");
+    expect(
+      events.some((e) => e.kind === "extract" && String(e.message).includes("JS-rendering fallback failed"))
+    ).toBe(true);
+    // Tick still completes the page using whatever the static shell gave us, rather than erroring the whole row out.
+    const queueRows = fake.getTable("crawl_queue");
+    expect(queueRows[0]?.status).toBe("done");
+  });
+
+  it("does not attempt headless rendering when ENABLE_JS_RENDERING is unset, even for shell-like HTML", async () => {
+    vi.mocked(safeFetch).mockImplementation(async (url: string) => {
+      if (url.endsWith("/robots.txt")) {
+        return makeFakeResponse(200, "User-agent: *\nAllow: /\n", { "content-type": "text/plain" });
+      }
+      if (url === "https://example.com/") {
+        return makeFakeResponse(200, SHELL_HTML, { "content-type": "text/html; charset=utf-8" });
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+
+    const fake = new FakeSupabase(
+      {
+        crawl_jobs: [buildJobFixture({ content_types: ["text"] })],
+        crawl_queue: [
+          {
+            id: 1,
+            job_id: "job-1",
+            url: "https://example.com/",
+            normalized_url: "https://example.com/",
+            depth: 0,
+            status: "pending",
+            discovered_from: null,
+            http_status: null,
+            skip_reason: null,
+            fetched_at: null,
+          },
+        ],
+      },
+      { robots_cache: "domain", job_rate_limits: "owner" }
+    );
+
+    const client = fake as any;
+    await processTickBatch(client, "job-1", {
+      userAgent: "CrawlrBot/1.0",
+      botToken: "CrawlrBot",
+      sleep: async () => {},
+    });
+
+    expect(renderPage).not.toHaveBeenCalled();
   });
 
   it("is a no-op if the job isn't in 'running' status", async () => {

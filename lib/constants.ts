@@ -11,9 +11,10 @@ export const DEFAULT_MAX_DEPTH = 3;
 export const HARD_MAX_DEPTH = 5;
 
 /** Soft time budget per `tick` invocation before it stops recursing and returns. */
-export const TICK_TIME_BUDGET_MS = 50_000;
-/** `maxDuration` set on the tick route itself (Vercel Pro plan ceiling). */
-export const TICK_MAX_DURATION_S = 60;
+export const TICK_TIME_BUDGET_MS = 270_000;
+/** `maxDuration` set on the tick route itself — see that file's comment
+ * for the Fluid Compute / plan-dependent ceiling this must stay under. */
+export const TICK_MAX_DURATION_S = 300;
 
 /** Total job wall-clock ceiling; watchdog/tick both check this and fail the job past it. */
 export const MAX_JOB_WALL_CLOCK_MS = 30 * 60 * 1000; // 30 minutes
@@ -61,6 +62,24 @@ export const RETENTION_WINDOW_MS = 48 * 60 * 60 * 1000; // 48h — jobs+storage 
 // ---- Images ZIP bundling ----
 export const ZIP_MAX_IMAGES = 50;
 export const ZIP_MAX_TOTAL_BYTES = 25 * 1024 * 1024; // 25 MB, HEAD-estimated
+
+// ---- JavaScript rendering fallback (see lib/render.ts) ----
+// This is a deliberate, explicit deviation from the original "no headless
+// browser" constraint, added at the user's request after a real target
+// site turned out to be a fully client-side-rendered SPA with no static
+// HTML to extract. Off by default — set ENABLE_JS_RENDERING=true to turn
+// it on. See README "JavaScript rendering (opt-in)" for the tradeoffs.
+export function isJsRenderingEnabled(): boolean {
+  return process.env.ENABLE_JS_RENDERING === "true";
+}
+/** If a fetched page's extracted word count is below this, and rendering
+ * is enabled, re-fetch it with a headless browser before giving up on it. */
+export const MIN_WORDS_BEFORE_RENDER_FALLBACK = 40;
+/** Navigation timeout for the headless-rendering fallback. Generous
+ * relative to FETCH_TIMEOUT_MS because launching a browser and waiting for
+ * a page's own JS to finish fetching/rendering its content is inherently
+ * slower than a single static HTTP request. */
+export const RENDER_TIMEOUT_MS = 20_000;
 
 // ---- User-Agent ----
 export const BOT_NAME = "CrawlrBot";

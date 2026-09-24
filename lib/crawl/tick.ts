@@ -17,11 +17,14 @@ import {
   MAX_ASSETS_PER_JOB,
   MAX_JOB_WALL_CLOCK_MS,
   MAX_TEXT_BYTES,
+  MIN_WORDS_BEFORE_RENDER_FALLBACK,
   TICK_BATCH_SIZE,
+  isJsRenderingEnabled,
   type ContentType,
   type JobStatus,
 } from "@/lib/constants";
 import { clampRateLimitRps } from "@/lib/rateLimiter";
+import { renderPage } from "@/lib/render";
 import { getRobotsForDomain, robotsUrlAllows } from "@/lib/robots";
 import { safeFetch, SsrfError } from "@/lib/ssrf";
 import { extractAssets, extractLinks, extractMainContent, normalizeUrl } from "@/lib/extract";
@@ -235,11 +238,38 @@ export async function processTickBatch(
 
     const contentTypeHeader = String(fetchResult.headers["content-type"] ?? "");
     const isHtml = contentTypeHeader.includes("html") || contentTypeHeader === "";
-    const html = isHtml ? fetchResult.body.toString("utf-8") : "";
+    let html = isHtml ? fetchResult.body.toString("utf-8") : "";
+
+    let mainContent: ReturnType<typeof extractMainContent> | null = null;
+    if (isHtml) {
+      mainContent = extractMainContent(html, row.url);
+      if (isJsRenderingEnabled() && mainContent.wordCount < MIN_WORDS_BEFORE_RENDER_FALLBACK) {
+        const beforeWordCount = mainContent.wordCount;
+        try {
+          const rendered = await renderPage(row.url, deps.userAgent);
+          html = rendered.html;
+          mainContent = extractMainContent(html, row.url);
+          await writeEvent(
+            supabase,
+            jobId,
+            "extract",
+            `Static HTML looked JS-rendered (${beforeWordCount}w) for ${row.url}; re-fetched with headless rendering (${mainContent.wordCount}w now)`
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "unknown render error";
+          await writeEvent(
+            supabase,
+            jobId,
+            "extract",
+            `JS-rendering fallback failed for ${row.url}: ${message}; keeping static HTML (${beforeWordCount}w)`
+          );
+        }
+      }
+    }
 
     let extractedWords = 0;
-    if (isHtml && contentTypes.has("text")) {
-      const { title, markdown, wordCount } = extractMainContent(html, row.url);
+    if (isHtml && contentTypes.has("text") && mainContent) {
+      const { title, markdown, wordCount } = mainContent;
       const bytes = Buffer.byteLength(markdown, "utf-8");
       if (runningTextBytes + bytes <= MAX_TEXT_BYTES) {
         await supabase.from("crawl_pages").insert({
