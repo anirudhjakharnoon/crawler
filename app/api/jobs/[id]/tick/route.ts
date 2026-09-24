@@ -8,13 +8,17 @@ import { getSupabaseAdmin } from "@/lib/supabase/admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Vercel Pro plan's serverless-function ceiling is 60s (Hobby is capped at
-// 10s and cannot run this route usefully; Enterprise can go to 900s). We
-// use the full 60s here and keep the in-process soft budget
-// (TICK_TIME_BUDGET_MS, ~50s) a bit under it so there's always time left to
-// finish writing the current row's DB state and, if needed, hand off to a
-// fresh invocation before Vercel forcibly kills this one.
-export const maxDuration = 60;
+// With Fluid Compute (on by default for new Vercel projects, all plans),
+// Vercel's own default+maximum function duration is 300s on Hobby, and
+// 300s default / up to 800s (1800s beta) on Pro+ — see README "maxDuration"
+// section. We use the full 300s here (safe on both plans) and keep the
+// in-process soft budget (TICK_TIME_BUDGET_MS) a bit under it so there's
+// always time left to finish writing the current row's DB state and, if
+// needed, hand off to a fresh invocation before Vercel forcibly kills this
+// one. If your project predates Fluid Compute and it's off (Project
+// Settings → Functions), Hobby's ceiling instead reverts to 10s, in which
+// case lower this back down to 10 or turn Fluid Compute on.
+export const maxDuration = 300;
 
 interface RouteParams {
   params: { id: string };

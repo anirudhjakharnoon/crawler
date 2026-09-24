@@ -2,14 +2,23 @@
 
 Precision website content extraction. Paste a URL, pick Text / Images /
 Video, pick a scope, and run a robots.txt-respecting, SSRF-hardened
-static-HTML crawl. No AI. No headless browser. No re-hosting. No login.
+static-HTML crawl. No AI. No re-hosting. No login.
 
 Stack: **Next.js 14 (App Router) + TypeScript + Tailwind**, deployed on
 **Vercel**, backed entirely by **Supabase** (Postgres for data + the crawl
 queue, Realtime for live progress, Storage for the final Markdown export,
 Anonymous Auth as the only identity). There is no Redis, no external queue
-service, no headless browser, no third-party scraping API, and no LLM/AI
-call anywhere in this codebase.
+service, no third-party scraping API, and no LLM/AI call anywhere in this
+codebase.
+
+> **Update:** the original spec was "static HTML only, no headless
+> browser" — that held for the first several iterations of this app. It
+> was deliberately relaxed after a real target site turned out to be a
+> 100%-client-side-rendered SPA with literally no content in its static
+> HTML (see §3.3 and §7 item 8). Headless rendering is **off by default**
+> (`ENABLE_JS_RENDERING=false`) and, when on, only ever engages as a
+> per-page fallback after the fast static fetch already ran and looked
+> empty — most pages on ordinary server-rendered sites never touch it.
 
 ---
 
@@ -339,6 +348,7 @@ Environment Variables):
 | `SUPABASE_SERVICE_ROLE_KEY` | server only (`lib/supabase/admin.ts`, `import "server-only"`) | **Never** prefix with `NEXT_PUBLIC_`. Bypasses RLS — used only in API routes/tick/cron. On newer Supabase projects this is labeled **"Secret key"** (`sb_secret_...`) instead of the older **"service_role key"** — same idea, use whichever your project shows, under this same variable name. |
 | `NEXT_PUBLIC_APP_URL` | `lib/robots.ts` (User-Agent string), `lib/crawl/invokeTick.ts` (self-fetch origin) | e.g. `https://your-deployment.vercel.app`. |
 | `CRON_SECRET` | `lib/http.ts` (`assertInternalRequest`) | Optional but recommended. Vercel Cron automatically sends this as a Bearer token when set in the Vercel project's env vars, so `/api/cron/*` and the tick self-fetch can be locked to "internal callers only" in production. Fails **open** (allows the request) only when `NODE_ENV !== "production"`, so local dev works without it. |
+| `ENABLE_JS_RENDERING` | server only (`lib/crawl/tick.ts`, `lib/render.ts`) | Optional, defaults to off. Set to exactly `true` to enable the headless-rendering fallback for JS-only pages — see §3.3 before turning this on. |
 
 ---
 
@@ -390,15 +400,89 @@ that env var is set on the project — no extra wiring needed.
 
 ### 3.2 `maxDuration` on the tick route
 
-`app/api/jobs/[id]/tick/route.ts` sets `export const maxDuration = 60;`
-— the ceiling for serverless functions on Vercel's **Pro** plan. **Hobby**
-plan functions are capped at **10 seconds**, which is not enough for this
-worker's soft time budget (`TICK_TIME_BUDGET_MS`, 50s) to ever complete a
-useful batch before being killed mid-fetch. If you deploy on Hobby, either
-lower `TICK_TIME_BUDGET_MS`/`TICK_BATCH_SIZE` substantially (expect much
-slower crawls, more self-fetch hops, more watchdog-driven recoveries) or
-upgrade to Pro. This is documented here per the spec's instruction to set
-`maxDuration` "as high as the deployment plan allows."
+`app/api/jobs/[id]/tick/route.ts` sets `export const maxDuration = 300;`
+(5 minutes). **Correction to an earlier version of this doc**: an earlier
+revision claimed Hobby was capped at 10s — that was stale information.
+As of Vercel's current docs, with **Fluid Compute** (on by default for new
+projects, all plans, since 2025), the default *and maximum* function
+duration on **Hobby is 300s**, and on **Pro/Enterprise it's 300s default,
+800s max, 1800s in beta**. 300s is therefore safe on both Hobby and Pro
+today and is set here per the spec's instruction to set `maxDuration` "as
+high as the deployment plan allows."
+
+If your project predates Fluid Compute and it's turned off (**Project
+Settings → Functions → Fluid Compute**), the old Hobby ceiling of **10s**
+applies instead, which is not enough for this worker's soft time budget
+(`TICK_TIME_BUDGET_MS`, 270s) to ever complete a useful batch before being
+killed mid-fetch. If that's your situation, either turn Fluid Compute on,
+or lower both `maxDuration` and `TICK_TIME_BUDGET_MS`/`TICK_BATCH_SIZE`
+substantially (expect much slower crawls, more self-fetch hops, more
+watchdog-driven recoveries).
+
+### 3.3 JavaScript rendering (opt-in, `lib/render.ts`)
+
+**Off by default.** Some sites (this app was extended to handle one:
+Zoho Desk-hosted help centers, and client-rendered SPAs generally) ship an
+essentially empty HTML shell and render literally everything — including
+every link — with JavaScript after the page loads. The static-only
+pipeline can only ever see that empty shell for such sites, so it
+correctly extracts ~1 page with no links: it isn't broken, it's static by
+design.
+
+**How the fallback works:**
+
+1. Every fetched page still goes through the fast static path first
+   (`safeFetch` + `extractMainContent`) exactly as before.
+2. If `ENABLE_JS_RENDERING=true` **and** the extracted word count is below
+   `MIN_WORDS_BEFORE_RENDER_FALLBACK` (40), the page is re-fetched with a
+   headless Chromium instance (`puppeteer-core` + `@sparticuz/chromium`,
+   the standard combo for running a real browser inside a Vercel/Lambda
+   serverless function) and the *rendered* HTML replaces the static HTML
+   for extraction (text, images, video, links) purposes.
+3. A `crawl_events` row of kind `extract` is written either way, so the
+   Event Log always shows plainly when this happened (and if it failed —
+   rendering failures fall back to keeping the static HTML rather than
+   erroring the row out).
+
+**SSRF stays enforced.** A full browser executes the page's own
+JavaScript, which can issue arbitrary fetch/XHR/image/script requests to
+any host it chooses — not just the page you navigated to. Every single
+request the rendered page makes is intercepted and validated through the
+exact same scheme/port/DNS+IP checks as `safeFetch`
+(`assertUrlIsSafeToFetch` in `lib/ssrf.ts`) before being allowed through;
+anything that fails (private IPs, the cloud metadata address, disallowed
+ports, etc.) is aborted. This is still "the most security-critical piece
+of the app" and is treated that way here too.
+
+**Real operational cost — read before enabling:**
+
+- **Slower, by a lot, per page that needs it.** Launching a browser and
+  waiting for a real page's own JS to fetch+render its content routinely
+  takes several seconds per page, vs. a static fetch's tens of
+  milliseconds. `RENDER_TIMEOUT_MS` (20s) caps the worst case.
+- **Function size.** `puppeteer-core` + `@sparticuz/chromium` add ~70MB to
+  the tick route's deployment bundle (mostly one brotli-compressed
+  Chromium binary). Vercel's current function size limit is 250MB
+  uncompressed, so this comfortably fits — but it's the single biggest
+  contributor to that route's bundle size by far.
+- **Memory.** Running Chromium, even headless, is meaningfully heavier
+  than a plain HTTP fetch. Vercel's default function memory (2GB on both
+  Hobby and Pro) should be enough for one page at a time, but if you see
+  out-of-memory errors in Vercel's function logs, that's the first thing
+  to check.
+- **`next.config.js` bundling.** `puppeteer-core`/`@sparticuz/chromium`
+  are listed under `experimental.serverComponentsExternalPackages` (so
+  Next's bundler doesn't try to process their native binaries) and
+  `experimental.outputFileTracingIncludes` (so Vercel's build actually
+  ships the Chromium binary file with the tick route — it's resolved via
+  a runtime filesystem path, not a static import, so Next can't discover
+  it on its own). If you ever see a "chromium binary not found" error in
+  Vercel's runtime logs after enabling this flag, that config is the
+  first place to look.
+
+To turn it on: set `ENABLE_JS_RENDERING=true` as a Vercel environment
+variable (Config type, not exposed to the browser — it's only read
+server-side in the tick route) and redeploy.
 
 ---
 
@@ -410,8 +494,11 @@ upgrade to Pro. This is documented here per the spec's instruction to set
 | `HARD_MAX_PAGES` | 2000 | Server-side ceiling — the `crawl_jobs` check constraint enforces this even if a client sends more. |
 | `DEFAULT_MAX_DEPTH` | 3 | Default BFS depth for `scope='site'`. |
 | `HARD_MAX_DEPTH` | 5 | Server-side ceiling (`crawl_jobs` check constraint). |
-| `TICK_TIME_BUDGET_MS` | 50,000 (50s) | Soft in-process time budget per `tick` invocation before it stops looping and either self-fetches to continue or finalizes. |
-| `TICK_MAX_DURATION_S` | 60 | `maxDuration` on the tick route — Vercel Pro's serverless ceiling (see §3.2). |
+| `TICK_TIME_BUDGET_MS` | 270,000 (270s) | Soft in-process time budget per `tick` invocation before it stops looping and either self-fetches to continue or finalizes. |
+| `TICK_MAX_DURATION_S` | 300 | `maxDuration` on the tick route — safe on Hobby and Pro with Fluid Compute (see §3.2). |
+| `ENABLE_JS_RENDERING` (env var) | `false` | Opt-in headless-rendering fallback for JS-only pages — see §3.4. |
+| `MIN_WORDS_BEFORE_RENDER_FALLBACK` | 40 | Below this extracted word count, retry the page with headless rendering (only if the flag above is on). |
+| `RENDER_TIMEOUT_MS` | 20,000 (20s) | Navigation timeout for the headless-rendering fallback. |
 | `MAX_JOB_WALL_CLOCK_MS` | 1,800,000 (30 min) | Absolute ceiling on total job age; a job started longer ago than this is force-failed by tick/watchdog even if still "running". |
 | `MAX_TEXT_BYTES` | 15,728,640 (15 MB) | Combined extracted-text ceiling per job. |
 | `MAX_RESPONSE_BYTES` | 10,485,760 (10 MB) | Per-fetch response size ceiling — `lib/ssrf.ts` aborts the stream past this. |
@@ -538,12 +625,33 @@ These were called out as they came up rather than silently changed:
    dependency-free-of-network-calls utility libraries — not third-party
    services, scraping APIs, queues, or AI calls, so they're within the
    stack constraints.
+8. **Headless-browser rendering fallback (`lib/render.ts`).** The
+   original spec's explicit scope boundary was "static HTML only — no
+   JavaScript rendering, no headless browser." This was reversed at the
+   user's explicit request after a real target site (a Zoho Desk help
+   center — a 100%-client-side-rendered SPA) returned zero extractable
+   content because its static HTML is a genuinely empty shell. The
+   fallback is **off by default** (`ENABLE_JS_RENDERING`), engages only
+   per-page after the static path already ran and looked empty, and every
+   network request the rendered page makes is still validated through the
+   same SSRF checks as the rest of the app — see §3.3 for the full
+   design, and the tradeoffs (bundle size, memory, latency) it brings.
+   `puppeteer-core` + `@sparticuz/chromium` are the two added
+   dependencies; this is a "third-party scraping API" only in the sense
+   that most people mean it (a paid hosted rendering service) — no such
+   external service is used, the browser runs inside this app's own
+   Vercel function.
 
 ---
 
-## 8. Explicit scope boundaries (unchanged from spec)
+## 8. Explicit scope boundaries (unchanged from spec, except item 1)
 
-- Static HTML only — no JavaScript rendering, no headless browser.
+1. ~~Static HTML only — no JavaScript rendering, no headless browser.~~
+   **Amended (see §3.3, §7 item 8):** static HTML is still the default and
+   only path for the overwhelming majority of pages; an opt-in, per-page,
+   SSRF-checked headless-rendering fallback now exists for pages whose
+   static HTML is an empty JS-only shell, off unless `ENABLE_JS_RENDERING`
+   is explicitly set.
 - Never bypasses logins, paywalls, or CAPTCHAs.
 - Images/videos are always linked to their original source, never
   re-hosted or proxied by this app (except the final assembled Markdown
