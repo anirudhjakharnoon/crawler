@@ -12,7 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@sparticuz/chromium": "^131.0.1",
+    "@sparticuz/chromium": "^141.0.0",
     "@supabase/ssr": "0.5.2",
     "@supabase/supabase-js": "2.45.4",
     "@vercel/functions": "^1.5.0",

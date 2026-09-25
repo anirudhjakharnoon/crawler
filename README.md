@@ -454,6 +454,28 @@ anything that fails (private IPs, the cloud metadata address, disallowed
 ports, etc.) is aborted. This is still "the most security-critical piece
 of the app" and is treated that way here too.
 
+**Known issue, fixed: `libnss3.so` missing on Vercel.** On an earlier pin
+of `@sparticuz/chromium` (131.x), the very first real deployment of this
+feature failed with:
+
+```
+Failed to launch the browser process: Code: 127 stderr: /tmp/chromium:
+error while loading shared libraries: libnss3.so: cannot open shared
+object file: No such file or directory
+```
+
+Root cause: `@sparticuz/chromium` bundles two different sets of shared
+libraries (for AL2 vs. AL2023 base images) and, on old versions, only knew
+how to pick between them via real AWS-Lambda-only env vars. Vercel's
+"Fluid Compute" runtime is Lambda-*compatible* but deliberately doesn't
+set those specific vars, so neither library set ever got extracted. Fixed
+by bumping to `@sparticuz/chromium@141.0.0`+, which detects Vercel
+natively via the `VERCEL` env var Vercel always sets — zero extra
+configuration needed. `lib/render.ts` also sets `AWS_LAMBDA_JS_RUNTIME` as
+a harmless defensive fallback for other Lambda-like platforms that don't
+set `VERCEL` (e.g. Netlify). If you ever see this exact error again after
+a dependency change, this is the first place to look.
+
 **Real operational cost — read before enabling:**
 
 - **Slower, by a lot, per page that needs it.** Launching a browser and

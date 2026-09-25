@@ -33,16 +33,36 @@ const HARMLESS_SCHEMES = new Set(["data:", "blob:", "about:", "chrome-extension:
 
 let browserPromise: Promise<Browser> | null = null;
 
+/**
+ * @sparticuz/chromium decides, once, at the moment it's first imported,
+ * whether it's running on an AL2023-compatible container and needs to
+ * extract+link its bundled shared libraries (libnss3.so etc.) accordingly.
+ * As of chromium >=137 it does this correctly on Vercel automatically via
+ * Vercel's own `VERCEL` env var (always set on deployments) — see
+ * https://github.com/Sparticuz/chromium — which is the real fix for the
+ * "error while loading shared libraries: libnss3.so: ..." crash this app
+ * hit on an older pinned version that predated that detection. This
+ * function is a defensive fallback for non-Vercel Lambda-like platforms
+ * that don't set `VERCEL` (e.g. Netlify) and is a no-op on Vercel itself;
+ * `??=` lets an operator's own env var win if one is already set.
+ */
+function ensureChromiumRuntimeDetected(): void {
+  process.env.AWS_LAMBDA_JS_RUNTIME ??= "nodejs22.x";
+}
+
 async function launchBrowser(): Promise<Browser> {
+  ensureChromiumRuntimeDetected();
   const [{ default: chromium }, puppeteer] = await Promise.all([
     import("@sparticuz/chromium"),
     import("puppeteer-core"),
   ]);
   const executablePath = await chromium.executablePath();
+  // puppeteer-core defaults to headless mode already (no `headless` flag
+  // needed) — newer @sparticuz/chromium versions dropped the static
+  // `.headless` property that older guides pass here.
   return puppeteer.launch({
     args: chromium.args,
     executablePath,
-    headless: chromium.headless,
   });
 }
 
