@@ -387,3 +387,18 @@ export async function safeFetchWithResolver(
 export async function safeFetch(rawUrl: string, options: SafeFetchOptions): Promise<SafeFetchResult> {
   return safeFetchWithResolver(rawUrl, options, resolveAndValidateHost);
 }
+
+/**
+ * Standalone SSRF validation predicate — the same three checks
+ * `safeFetch` applies per redirect hop (scheme/port/DNS+IP), exposed for
+ * callers that don't go through `safeFetch`'s own request/response
+ * plumbing. Used by `lib/render.ts` to validate every single network
+ * request a headless-rendered page makes (not just the top-level
+ * navigation), since a full browser executes page JavaScript that can
+ * issue its own fetch/XHR/image/script requests to anywhere.
+ */
+export async function assertUrlIsSafeToFetch(rawUrl: string, allowedPorts: Set<number>): Promise<void> {
+  const url = parseUrlStrict(rawUrl);
+  assertPortAllowed(url, allowedPorts);
+  await resolveAndValidateHost(url.hostname);
+}
